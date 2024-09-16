@@ -23,8 +23,9 @@
 
 #include <glib.h>
 #include <stdio.h>
-#include  <signal.h>
+#include <signal.h>
 #include <stdint.h>
+#include <fcntl.h>
 #include "adapter.h"
 #include "device.h"
 #include "logger.h"
@@ -45,6 +46,22 @@
 GMainLoop *loop = NULL;
 Adapter *default_adapter = NULL;
 Agent *agent = NULL;
+Device *default_device = NULL;
+
+struct info {
+   double temp;
+   double pres;
+   double humi;
+};
+
+/* place to store the temperature, pressure and humidity */
+struct info info;
+int tries = 0;
+int done = 0;
+#define HAS_TEMP 0x01
+#define HAS_PRES 0x02
+#define HAS_HUMI 0x04
+#define IS_DONE  0x07
 
 
 void on_connection_state_changed(Device *device, ConnectionState state, const GError *error) {
@@ -113,16 +130,32 @@ void on_read(Device *device, Characteristic *characteristic, const GByteArray *b
         log_debug(TAG, "Temperature to parse...");
         int16_t temp = parser_get_sint16(parser);
         log_debug(TAG, "temp = %d", temp);
+        info.temp = temp / 100.0;
+        done = done | HAS_TEMP;
     } else if (g_str_equal(uuid, PRESSURE_CHAR_UUID)) {
         log_debug(TAG, "Pressure to parse...");
-        uint32_t press = parser_get_uint32(parser);
-        log_debug(TAG, "press = %d", press);
+        uint32_t pres = parser_get_uint32(parser);
+        log_debug(TAG, "pres = %d", pres);
+        info.pres = pres / 100.0;
+        done = done | HAS_PRES;
     } else if (g_str_equal(uuid, HUMIDITY_CHAR_UUID)) {
         log_debug(TAG, "Humidity to parse...");
-        uint16_t hum = parser_get_uint16(parser);
-        log_debug(TAG, "hum = %d", hum);
+        uint16_t humi = parser_get_uint16(parser);
+        log_debug(TAG, "hum = %d", humi);
+        info.humi = humi / 1000.0;
+        done = done | HAS_HUMI;
+    }
+    if (done == IS_DONE) {
+        char mess[100];
+        char *tmpname = "/tmp/data.txt";
+        sprintf(mess, "%d %4.2f %6.2f %4.2f", 0, info.temp, info.pres, info.humi);
+        int fd = open(tmpname, O_WRONLY | O_APPEND | O_CREAT | O_TRUNC, 0644);
+        write(fd, mess, strlen(mess));
+        close(fd);
     }
     parser_free(parser);
+    if (done == IS_DONE)
+        tries = 10; /* Done exit in the next loop */
 }
 
 void on_write(Device *device, Characteristic *characteristic, const GByteArray *byteArray, const GError *error) {
@@ -183,6 +216,7 @@ void on_scan_result(Adapter *adapter, Device *device) {
         binc_device_set_notify_state_cb(device, &on_notification_state_changed);
         binc_device_set_read_desc_cb(device, &on_desc_read);
         binc_device_connect(device);
+        default_device = device;
     } else {
         log_debug(TAG,"ignoring...");
     }
@@ -220,9 +254,19 @@ void on_powered_state_changed(Adapter *adapter, gboolean state) {
 }
 
 gboolean callback(gpointer data) {
+    log_debug(TAG, "callback");
+    if (tries < 10) {
+        tries++;
+        return TRUE;
+    }
     if (agent != NULL) {
         binc_agent_free(agent);
         agent = NULL;
+    }
+
+    if (default_device != NULL) {
+        binc_device_disconnect(default_device);
+        default_device = NULL;
     }
 
     if (default_adapter != NULL) {
@@ -237,6 +281,7 @@ gboolean callback(gpointer data) {
 static void cleanup_handler(int signo) {
     if (signo == SIGINT) {
         log_error(TAG, "received SIGINT");
+        tries = 10;
         callback(loop);
     }
 }
@@ -279,7 +324,7 @@ int main(void) {
     }
 
     // Bail out after some time
-    g_timeout_add_seconds(60, callback, loop);
+    g_timeout_add_seconds(6, callback, loop);
 
     // Start the mainloop
     g_main_loop_run(loop);
