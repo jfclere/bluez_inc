@@ -136,13 +136,13 @@ void on_read(Device *device, Characteristic *characteristic, const GByteArray *b
         log_debug(TAG, "Pressure to parse...");
         uint32_t pres = parser_get_uint32(parser);
         log_debug(TAG, "pres = %d", pres);
-        info.pres = pres / 100.0;
+        info.pres = pres / 1000.0;
         done = done | HAS_PRES;
     } else if (g_str_equal(uuid, HUMIDITY_CHAR_UUID)) {
         log_debug(TAG, "Humidity to parse...");
         uint16_t humi = parser_get_uint16(parser);
         log_debug(TAG, "hum = %d", humi);
-        info.humi = humi / 1000.0;
+        info.humi = humi / 100.0;
         done = done | HAS_HUMI;
     }
     if (done == IS_DONE) {
