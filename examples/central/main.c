@@ -24,6 +24,7 @@
 #include <glib.h>
 #include <stdio.h>
 #include  <signal.h>
+#include <stdint.h>
 #include "adapter.h"
 #include "device.h"
 #include "logger.h"
@@ -31,8 +32,11 @@
 #include "parser.h"
 
 #define TAG "Main"
-#define HTS_SERVICE_UUID "00001809-0000-1000-8000-00805f9b34fb"
-#define TEMPERATURE_CHAR_UUID "00002a1c-0000-1000-8000-00805f9b34fb"
+#define HTS_SERVICE_UUID "0000181a-0000-1000-8000-00805f9b34fb"
+/* we use 2A6E */
+#define TEMPERATURE_CHAR_UUID "00002a6e-0000-1000-8000-00805f9b34fb"
+#define PRESSURE_CHAR_UUID "00002a6d-0000-1000-8000-00805f9b34fb"
+#define HUMIDITY_CHAR_UUID "00002a6f-0000-1000-8000-00805f9b34fb"
 #define DIS_SERVICE "0000180a-0000-1000-8000-00805f9b34fb"
 #define DIS_MANUFACTURER_CHAR "00002a29-0000-1000-8000-00805f9b34fb"
 #define DIS_MODEL_CHAR "00002a24-0000-1000-8000-00805f9b34fb"
@@ -92,6 +96,7 @@ void on_read(Device *device, Characteristic *characteristic, const GByteArray *b
         log_debug(TAG, "failed to read '%s' (error %d: %s)", uuid, error->code, error->message);
         return;
     }
+    log_debug(TAG, "on_read %s", uuid);
 
     if (byteArray == NULL) return;
 
@@ -104,6 +109,18 @@ void on_read(Device *device, Characteristic *characteristic, const GByteArray *b
         GString *model = parser_get_string(parser);
         log_debug(TAG, "model = %s", model->str);
         g_string_free(model, TRUE);
+    } else if (g_str_equal(uuid, TEMPERATURE_CHAR_UUID)) {
+        log_debug(TAG, "Temperature to parse...");
+        int16_t temp = parser_get_sint16(parser);
+        log_debug(TAG, "temp = %d", temp);
+    } else if (g_str_equal(uuid, PRESSURE_CHAR_UUID)) {
+        log_debug(TAG, "Pressure to parse...");
+        uint32_t press = parser_get_uint32(parser);
+        log_debug(TAG, "press = %d", press);
+    } else if (g_str_equal(uuid, HUMIDITY_CHAR_UUID)) {
+        log_debug(TAG, "Humidity to parse...");
+        uint16_t hum = parser_get_uint16(parser);
+        log_debug(TAG, "hum = %d", hum);
     }
     parser_free(parser);
 }
@@ -125,8 +142,11 @@ void on_services_resolved(Device *device) {
 
     binc_device_read_char(device, DIS_SERVICE, DIS_MANUFACTURER_CHAR);
     binc_device_read_char(device, DIS_SERVICE, DIS_MODEL_CHAR);
-    binc_device_start_notify(device, HTS_SERVICE_UUID, TEMPERATURE_CHAR_UUID);
-    binc_device_read_desc(device, HTS_SERVICE_UUID, TEMPERATURE_CHAR_UUID, CUD_CHAR);
+    // binc_device_start_notify(device, HTS_SERVICE_UUID, TEMPERATURE_CHAR_UUID);
+    binc_device_read_char(device, HTS_SERVICE_UUID, TEMPERATURE_CHAR_UUID);
+    binc_device_read_char(device, HTS_SERVICE_UUID, PRESSURE_CHAR_UUID);
+    binc_device_read_char(device, HTS_SERVICE_UUID, HUMIDITY_CHAR_UUID);
+    // binc_device_read_desc(device, HTS_SERVICE_UUID, TEMPERATURE_CHAR_UUID, CUD_CHAR);
 }
 
 gboolean on_request_authorization(Device *device) {
@@ -146,19 +166,26 @@ guint32 on_request_passkey(Device *device) {
 }
 
 void on_scan_result(Adapter *adapter, Device *device) {
-    char *deviceToString = binc_device_to_string(device);
-    log_debug(TAG, deviceToString);
-    g_free(deviceToString);
+    /* Only our device */
+    const char* name = binc_device_get_name(device);
+    if (name != NULL && g_str_has_prefix(name, "blecenv")) {
+        char *deviceToString = binc_device_to_string(device);
+        log_debug(TAG, deviceToString);
+        g_free(deviceToString);
+        binc_adapter_stop_discovery(adapter);
 
-    binc_device_set_connection_state_change_cb(device, &on_connection_state_changed);
-    binc_device_set_services_resolved_cb(device, &on_services_resolved);
-    binc_device_set_bonding_state_changed_cb(device, &on_bonding_state_changed);
-    binc_device_set_read_char_cb(device, &on_read);
-    binc_device_set_write_char_cb(device, &on_write);
-    binc_device_set_notify_char_cb(device, &on_notify);
-    binc_device_set_notify_state_cb(device, &on_notification_state_changed);
-    binc_device_set_read_desc_cb(device, &on_desc_read);
-    binc_device_connect(device);
+        binc_device_set_connection_state_change_cb(device, &on_connection_state_changed);
+        binc_device_set_services_resolved_cb(device, &on_services_resolved);
+        binc_device_set_bonding_state_changed_cb(device, &on_bonding_state_changed);
+        binc_device_set_read_char_cb(device, &on_read);
+        binc_device_set_write_char_cb(device, &on_write);
+        binc_device_set_notify_char_cb(device, &on_notify);
+        binc_device_set_notify_state_cb(device, &on_notification_state_changed);
+        binc_device_set_read_desc_cb(device, &on_desc_read);
+        binc_device_connect(device);
+    } else {
+        log_debug(TAG,"ignoring...");
+    }
 }
 
 void on_discovery_state_changed(Adapter *adapter, DiscoveryState state, const GError *error) {
@@ -176,9 +203,10 @@ void start_scanning(Adapter *adapter) {
     g_ptr_array_add(service_uuids, HTS_SERVICE_UUID);
 
     // Set discovery callbacks and start discovery
+    log_info(TAG, "start_scanning\n");
     binc_adapter_set_discovery_cb(adapter, &on_scan_result);
     binc_adapter_set_discovery_state_cb(adapter, &on_discovery_state_changed);
-    binc_adapter_set_discovery_filter(adapter, -100, service_uuids, NULL);
+    // binc_adapter_set_discovery_filter(adapter, -100, service_uuids, NULL);
     g_ptr_array_free(service_uuids, TRUE);
 
     binc_adapter_start_discovery(default_adapter);
@@ -243,6 +271,7 @@ int main(void) {
         if (!binc_adapter_get_powered_state(default_adapter)) {
             binc_adapter_power_on(default_adapter);
         } else {
+            log_info(TAG, "using adapter start_scanning\n");
             start_scanning(default_adapter);
         }
     } else {
