@@ -237,7 +237,16 @@ void start_scanning(Adapter *adapter) {
     g_ptr_array_add(service_uuids, HTS_SERVICE_UUID);
 
     // Set discovery callbacks and start discovery
-    log_info(TAG, "start_scanning\n");
+    log_info(TAG, "start_scanning");
+
+    GList *result = binc_adapter_get_connected_devices(adapter);
+    for (GList *iterator = result; iterator; iterator = iterator->next) {
+        Device *device = (Device *) iterator->data;
+        log_debug(TAG, "start_scanning connected %s", binc_device_get_name(device)); 
+        binc_device_disconnect(device);
+    }
+    g_list_free(result);
+
     binc_adapter_set_discovery_cb(adapter, &on_scan_result);
     binc_adapter_set_discovery_state_cb(adapter, &on_discovery_state_changed);
     // binc_adapter_set_discovery_filter(adapter, -100, service_uuids, NULL);
@@ -254,7 +263,6 @@ void on_powered_state_changed(Adapter *adapter, gboolean state) {
 }
 
 gboolean callback(gpointer data) {
-    log_debug(TAG, "callback");
     if (tries < 10) {
         tries++;
         return TRUE;
@@ -316,7 +324,7 @@ int main(void) {
         if (!binc_adapter_get_powered_state(default_adapter)) {
             binc_adapter_power_on(default_adapter);
         } else {
-            log_info(TAG, "using adapter start_scanning\n");
+            log_info(TAG, "using adapter start_scanning");
             start_scanning(default_adapter);
         }
     } else {
@@ -335,5 +343,9 @@ int main(void) {
 
     // Clean up mainloop
     g_main_loop_unref(loop);
+    if (done != IS_DONE) {
+        log_error("MAIN", "Not all the value were discovered\n");
+        exit(1);
+    }
     return 0;
 }
