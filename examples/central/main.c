@@ -231,6 +231,20 @@ void on_discovery_state_changed(Adapter *adapter, DiscoveryState state, const GE
               binc_adapter_get_path(adapter));
 }
 
+int remove_connected_device(Adapter *adapter) {
+    // If the device is still connected we are in troubles
+    int disconnect = 0;
+    GList *result = binc_adapter_get_connected_devices(adapter);
+    for (GList *iterator = result; iterator; iterator = iterator->next) {
+        Device *device = (Device *) iterator->data;
+        log_debug(TAG, "start_scanning connected %s", binc_device_get_name(device)); 
+        binc_device_disconnect(device);
+        disconnect = 1;
+    }
+    g_list_free(result);
+    return disconnect;
+}
+
 void start_scanning(Adapter *adapter) {
     // Build UUID array so we can use it in the discovery filter
     GPtrArray *service_uuids = g_ptr_array_new();
@@ -238,14 +252,6 @@ void start_scanning(Adapter *adapter) {
 
     // Set discovery callbacks and start discovery
     log_info(TAG, "start_scanning");
-
-    GList *result = binc_adapter_get_connected_devices(adapter);
-    for (GList *iterator = result; iterator; iterator = iterator->next) {
-        Device *device = (Device *) iterator->data;
-        log_debug(TAG, "start_scanning connected %s", binc_device_get_name(device)); 
-        binc_device_disconnect(device);
-    }
-    g_list_free(result);
 
     binc_adapter_set_discovery_cb(adapter, &on_scan_result);
     binc_adapter_set_discovery_state_cb(adapter, &on_discovery_state_changed);
@@ -325,7 +331,8 @@ int main(void) {
             binc_adapter_power_on(default_adapter);
         } else {
             log_info(TAG, "using adapter start_scanning");
-            start_scanning(default_adapter);
+            if (!remove_connected_device(default_adapter))
+                start_scanning(default_adapter);
         }
     } else {
         log_error("MAIN", "No default_adapter found");
