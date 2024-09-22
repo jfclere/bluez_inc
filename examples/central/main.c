@@ -43,26 +43,128 @@
 #define DIS_MODEL_CHAR "00002a24-0000-1000-8000-00805f9b34fb"
 #define CUD_CHAR "00002901-0000-1000-8000-00805f9b34fb"
 
+#define MAXTRIES 10
+
 GMainLoop *loop = NULL;
 Adapter *default_adapter = NULL;
 Agent *agent = NULL;
-Device *default_device = NULL;
+char *bledevnameprefix = NULL;
+int tries = 0;
 
+/* place to store the temperature, pressure and humidity */
 struct info {
    double temp;
    double pres;
    double humi;
 };
 
-/* place to store the temperature, pressure and humidity */
-struct info info;
-int tries = 0;
-int done = 0;
-#define HAS_TEMP 0x01
-#define HAS_PRES 0x02
-#define HAS_HUMI 0x04
-#define IS_DONE  0x07
+/* place to the BLE device and status */
+struct bledev {
+    Device *device;
+    int done;
+    struct info info;
+};
+#define MAXBLEDEV 10
+struct bledev bledev[MAXBLEDEV] = { 0 };
 
+#define HAS_TEMP     0x01
+#define HAS_PRES     0x02
+#define HAS_HUMI     0x04
+#define IS_DONE      0x07
+#define NEEDS_REMOVE 0x10
+
+/* the values once we receive them */
+void bledev_set_temp(Device *device, int16_t temp)
+{
+    for(int i=0; i<MAXBLEDEV; i++) {
+        if (bledev[i].device == device) {
+            bledev[i].info.temp = temp / 100.0;
+            bledev[i].done = bledev[i].done | HAS_TEMP;
+            break;
+        }
+    }
+}
+void bledev_set_pres(Device *device, uint32_t pres)
+{
+    for(int i=0; i<MAXBLEDEV; i++) {
+        if (bledev[i].device == device) {
+            bledev[i].info.pres = pres / 1000.0;
+            bledev[i].done = bledev[i].done | HAS_PRES;
+            break;
+        }
+    }
+}
+void bledev_set_humi(Device *device, uint16_t humi)
+{
+    for(int i=0; i<MAXBLEDEV; i++) {
+        if (bledev[i].device == device) {
+            bledev[i].info.humi = humi / 100.0;
+            bledev[i].done = bledev[i].done | HAS_HUMI;
+            break;
+        }
+    }
+}
+void bledev_write_info(Device *device)
+{
+    for(int i=0; i<MAXBLEDEV; i++) {
+        if (bledev[i].device == device) {
+            if (bledev[i].done == IS_DONE) {
+                char mess[100];
+                char tmpname[100];
+                const char* name = binc_device_get_name(device);
+                /* use the device name */
+                strcpy(tmpname, "/tmp/");
+                strcat(tmpname, name);
+                strcat(tmpname, ".txt");
+                sprintf(mess, "%d %4.2f %6.2f %4.2f", 0, bledev[i].info.temp, bledev[i].info.pres, bledev[i].info.humi);
+                int fd = open(tmpname, O_WRONLY | O_APPEND | O_CREAT | O_TRUNC, 0644);
+                write(fd, mess, strlen(mess));
+                close(fd);
+            }
+            break;
+        }
+    }
+}
+/* check if all devices have given their values */
+int all_bledev_done(void)
+{
+    for(int i=0; i<MAXBLEDEV; i++) {
+        if (bledev[i].device != NULL) {
+            if (bledev[i].done != IS_DONE) {
+                log_debug(TAG, "all_bledev_done NOT  DONE");
+                return 0;
+            }
+        }
+    }
+    log_debug(TAG, "all_bledev_done all  DONE");
+    return 1;
+}
+void bledev_disconnect(void)
+{
+    for(int i=0; i<MAXBLEDEV; i++) {
+        if (bledev[i].device != NULL) {
+            binc_device_disconnect(bledev[i].device);
+            bledev[i].device = NULL;
+            bledev[i].done = 0;
+        }
+    }
+}
+void add_bledev(Device *device)
+{
+    for(int i=0; i<MAXBLEDEV; i++) {
+        if (bledev[i].device == device) {
+            bledev[i].done = 0;
+            return;
+        }
+    }
+    for(int i=0; i<MAXBLEDEV; i++) {
+        if (bledev[i].device == NULL) {
+            bledev[i].device = device;
+            bledev[i].done = 0;
+            return;
+        }
+    }
+}
 
 void on_connection_state_changed(Device *device, ConnectionState state, const GError *error) {
     if (error != NULL) {
@@ -130,32 +232,22 @@ void on_read(Device *device, Characteristic *characteristic, const GByteArray *b
         log_debug(TAG, "Temperature to parse...");
         int16_t temp = parser_get_sint16(parser);
         log_debug(TAG, "temp = %d", temp);
-        info.temp = temp / 100.0;
-        done = done | HAS_TEMP;
+        bledev_set_temp(device, temp);
     } else if (g_str_equal(uuid, PRESSURE_CHAR_UUID)) {
         log_debug(TAG, "Pressure to parse...");
         uint32_t pres = parser_get_uint32(parser);
         log_debug(TAG, "pres = %d", pres);
-        info.pres = pres / 1000.0;
-        done = done | HAS_PRES;
+        bledev_set_pres(device,pres);
     } else if (g_str_equal(uuid, HUMIDITY_CHAR_UUID)) {
         log_debug(TAG, "Humidity to parse...");
         uint16_t humi = parser_get_uint16(parser);
         log_debug(TAG, "hum = %d", humi);
-        info.humi = humi / 100.0;
-        done = done | HAS_HUMI;
+        bledev_set_humi(device,humi);
     }
-    if (done == IS_DONE) {
-        char mess[100];
-        char *tmpname = "/tmp/data.txt";
-        sprintf(mess, "%d %4.2f %6.2f %4.2f", 0, info.temp, info.pres, info.humi);
-        int fd = open(tmpname, O_WRONLY | O_APPEND | O_CREAT | O_TRUNC, 0644);
-        write(fd, mess, strlen(mess));
-        close(fd);
-    }
+    bledev_write_info(device);
     parser_free(parser);
-    if (done == IS_DONE)
-        tries = 10; /* Done exit in the next loop */
+    if (all_bledev_done())
+        tries = MAXTRIES; /* Done exit in the next loop */
 }
 
 void on_write(Device *device, Characteristic *characteristic, const GByteArray *byteArray, const GError *error) {
@@ -201,11 +293,12 @@ guint32 on_request_passkey(Device *device) {
 void on_scan_result(Adapter *adapter, Device *device) {
     /* Only our device */
     const char* name = binc_device_get_name(device);
-    if (name != NULL && g_str_has_prefix(name, "blecenv")) {
+    if (name != NULL && g_str_has_prefix(name, bledevnameprefix)) {
         char *deviceToString = binc_device_to_string(device);
         log_debug(TAG, deviceToString);
         g_free(deviceToString);
-        binc_adapter_stop_discovery(adapter);
+        /* XXX binc_adapter_stop_discovery we will get only one sensor */
+        // binc_adapter_stop_discovery(adapter);
 
         binc_device_set_connection_state_change_cb(device, &on_connection_state_changed);
         binc_device_set_services_resolved_cb(device, &on_services_resolved);
@@ -216,7 +309,7 @@ void on_scan_result(Adapter *adapter, Device *device) {
         binc_device_set_notify_state_cb(device, &on_notification_state_changed);
         binc_device_set_read_desc_cb(device, &on_desc_read);
         binc_device_connect(device);
-        default_device = device;
+        add_bledev(device);
     } else {
         log_debug(TAG,"ignoring...");
     }
@@ -269,7 +362,7 @@ void on_powered_state_changed(Adapter *adapter, gboolean state) {
 }
 
 gboolean callback(gpointer data) {
-    if (tries < 10) {
+    if (tries < MAXTRIES) {
         tries++;
         return TRUE;
     }
@@ -278,10 +371,7 @@ gboolean callback(gpointer data) {
         agent = NULL;
     }
 
-    if (default_device != NULL) {
-        binc_device_disconnect(default_device);
-        default_device = NULL;
-    }
+    bledev_disconnect();
 
     if (default_adapter != NULL) {
         binc_adapter_free(default_adapter);
@@ -295,14 +385,19 @@ gboolean callback(gpointer data) {
 static void cleanup_handler(int signo) {
     if (signo == SIGINT) {
         log_error(TAG, "received SIGINT");
-        tries = 10;
+        tries = MAXTRIES;
         callback(loop);
     }
 }
 
-int main(void) {
+int main(int argc, char **argv) {
     log_enabled(TRUE);
     log_set_level(LOG_DEBUG);
+
+    if (argc == 2)
+        bledevnameprefix = argv[1];
+    else
+        bledevnameprefix = "bleenv_sensor";
 
     // Get a DBus connection
     GDBusConnection *dbusConnection = g_bus_get_sync(G_BUS_TYPE_SYSTEM, NULL, NULL);
@@ -350,7 +445,7 @@ int main(void) {
 
     // Clean up mainloop
     g_main_loop_unref(loop);
-    if (done != IS_DONE) {
+    if (!all_bledev_done()) {
         log_error("MAIN", "Not all the value were discovered\n");
         exit(1);
     }
