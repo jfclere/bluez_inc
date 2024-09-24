@@ -374,6 +374,8 @@ gboolean callback(gpointer data) {
     bledev_disconnect();
 
     if (default_adapter != NULL) {
+        /* XXX: stop discovery */
+        binc_adapter_stop_discovery(default_adapter);
         binc_adapter_free(default_adapter);
         default_adapter = NULL;
     }
