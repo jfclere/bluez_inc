@@ -348,7 +348,9 @@ void start_scanning(Adapter *adapter) {
 
     binc_adapter_set_discovery_cb(adapter, &on_scan_result);
     binc_adapter_set_discovery_state_cb(adapter, &on_discovery_state_changed);
+    // XXX: try to use the pattern
     // binc_adapter_set_discovery_filter(adapter, -100, service_uuids, NULL);
+    binc_adapter_set_discovery_filter(adapter, -100, NULL, bledevnameprefix);
     g_ptr_array_free(service_uuids, TRUE);
 
     binc_adapter_start_discovery(default_adapter);
