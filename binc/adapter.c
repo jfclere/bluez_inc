@@ -237,6 +237,13 @@ static void binc_internal_adapter_changed(__attribute__((unused)) GDBusConnectio
         g_variant_iter_free(properties_invalidated);
 }
 
+static gboolean binc_g_str_has_prefix(const char* name, const char* pattern)
+{
+    if (name == NULL)
+        return FALSE;
+    return g_str_has_prefix(name, pattern);
+}
+
 static gboolean matches_discovery_filter(Adapter *adapter, Device *device) {
     g_assert(adapter != NULL);
     g_assert(device != NULL);
@@ -245,7 +252,7 @@ static gboolean matches_discovery_filter(Adapter *adapter, Device *device) {
 
     const char *pattern = adapter->discovery_filter.pattern;
     if (pattern != NULL) {
-        if (!(g_str_has_prefix(binc_device_get_name(device), pattern) ||
+        if (!(binc_g_str_has_prefix(binc_device_get_name(device), pattern) ||
               g_str_has_prefix(binc_device_get_address(device), pattern)))
             return FALSE;
     }
