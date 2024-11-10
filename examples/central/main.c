@@ -318,6 +318,9 @@ void on_scan_result(Adapter *adapter, Device *device) {
 void on_discovery_state_changed(Adapter *adapter, DiscoveryState state, const GError *error) {
     if (error != NULL) {
         log_debug(TAG, "discovery error (error %d: %s)", error->code, error->message);
+        tries = MAXTRIES;
+        if (error->code == 36)
+            default_adapter = adapter;
         return;
     }
     log_debug(TAG, "discovery '%s' (%s)", binc_adapter_get_discovery_state_name(adapter),
