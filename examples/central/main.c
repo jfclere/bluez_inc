@@ -50,6 +50,7 @@ Adapter *default_adapter = NULL;
 Agent *agent = NULL;
 char *bledevnameprefix = NULL;
 int tries = 0;
+int fail = -1; /* we reset it once we have the information */
 
 /* place to store the temperature, pressure and humidity */
 struct info {
@@ -246,8 +247,10 @@ void on_read(Device *device, Characteristic *characteristic, const GByteArray *b
     }
     bledev_write_info(device);
     parser_free(parser);
-    if (all_bledev_done())
+    if (all_bledev_done()) {
+        fail = 0;
         tries = MAXTRIES; /* Done exit in the next loop */
+    }
 }
 
 void on_write(Device *device, Characteristic *characteristic, const GByteArray *byteArray, const GError *error) {
@@ -381,6 +384,11 @@ gboolean callback(gpointer data) {
     if (default_adapter != NULL) {
         /* XXX: stop discovery */
         binc_adapter_stop_discovery(default_adapter);
+        if (fail) {
+            /* try to power off the adapter */
+            log_debug(TAG, "ERROR powering %s off", binc_adapter_get_path(default_adapter));
+            binc_adapter_power_off(default_adapter);
+        }
         binc_adapter_free(default_adapter);
         default_adapter = NULL;
     }
