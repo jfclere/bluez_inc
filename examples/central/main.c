@@ -336,8 +336,15 @@ int remove_connected_device(Adapter *adapter) {
     GList *result = binc_adapter_get_connected_devices(adapter);
     for (GList *iterator = result; iterator; iterator = iterator->next) {
         Device *device = (Device *) iterator->data;
-        log_debug(TAG, "start_scanning connected %s", binc_device_get_name(device)); 
+        log_debug(TAG, "remove_connected_device connected %s", binc_device_get_name(device)); 
         binc_device_disconnect(device);
+        disconnect = 1;
+    }
+    g_list_free(result);
+    result = binc_adapter_get_devices(adapter);
+    for (GList *iterator = result; iterator; iterator = iterator->next) {
+        Device *device = (Device *) iterator->data;
+        log_debug(TAG, "remove_connected_device all %s", binc_device_get_name(device));
         binc_adapter_remove_device(adapter, device);
         disconnect = 1;
     }
