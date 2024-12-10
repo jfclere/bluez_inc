@@ -338,6 +338,7 @@ int remove_connected_device(Adapter *adapter) {
         Device *device = (Device *) iterator->data;
         log_debug(TAG, "start_scanning connected %s", binc_device_get_name(device)); 
         binc_device_disconnect(device);
+        binc_adapter_remove_device(adapter, device);
         disconnect = 1;
     }
     g_list_free(result);
