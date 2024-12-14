@@ -38,10 +38,14 @@
 #define TEMPERATURE_CHAR_UUID "00002a6e-0000-1000-8000-00805f9b34fb"
 #define PRESSURE_CHAR_UUID "00002a6d-0000-1000-8000-00805f9b34fb"
 #define HUMIDITY_CHAR_UUID "00002a6f-0000-1000-8000-00805f9b34fb"
+
 #define DIS_SERVICE "0000180a-0000-1000-8000-00805f9b34fb"
 #define DIS_MANUFACTURER_CHAR "00002a29-0000-1000-8000-00805f9b34fb"
 #define DIS_MODEL_CHAR "00002a24-0000-1000-8000-00805f9b34fb"
 #define CUD_CHAR "00002901-0000-1000-8000-00805f9b34fb"
+
+#define BAT_SERVICE_UUID "0000180f-0000-1000-8000-00805f9b34fb"
+#define BATVAL_CHAR_UUID "00002a19-0000-1000-8000-00805f9b34fb"
 
 #define MAXTRIES 10
 
@@ -57,6 +61,7 @@ struct info {
    double temp;
    double pres;
    double humi;
+   double batl;
 };
 
 /* place to the BLE device and status */
@@ -72,6 +77,7 @@ struct bledev bledev[MAXBLEDEV] = { 0 };
 #define HAS_PRES     0x02
 #define HAS_HUMI     0x04
 #define IS_DONE      0x07
+#define HAS_BATL     0x20
 #define NEEDS_REMOVE 0x10
 
 /* the values once we receive them */
@@ -105,11 +111,21 @@ void bledev_set_humi(Device *device, uint16_t humi)
         }
     }
 }
+void bledev_set_batl(Device *device, uint16_t batl)
+{
+    for(int i=0; i<MAXBLEDEV; i++) {
+        if (bledev[i].device == device) {
+            bledev[i].info.batl = batl;
+            bledev[i].done = bledev[i].done | HAS_BATL;
+            break;
+        }
+    }
+}
 void bledev_write_info(Device *device)
 {
     for(int i=0; i<MAXBLEDEV; i++) {
         if (bledev[i].device == device) {
-            if (bledev[i].done == IS_DONE) {
+            if (bledev[i].done & IS_DONE) {
                 char mess[100];
                 char tmpname[100];
                 const char* name = binc_device_get_name(device);
@@ -117,7 +133,10 @@ void bledev_write_info(Device *device)
                 strcpy(tmpname, "/tmp/");
                 strcat(tmpname, name);
                 strcat(tmpname, ".txt");
-                sprintf(mess, "%d %4.2f %6.2f %4.2f", 0, bledev[i].info.temp, bledev[i].info.pres, bledev[i].info.humi);
+                if (bledev[i].done & HAS_BATL)
+                    sprintf(mess, "%d %4.2f %6.2f %4.2f %4.2f", 0, bledev[i].info.temp, bledev[i].info.pres, bledev[i].info.humi, bledev[i].info.batl);
+                else
+                    sprintf(mess, "%d %4.2f %6.2f %4.2f", 0, bledev[i].info.temp, bledev[i].info.pres, bledev[i].info.humi);
                 int fd = open(tmpname, O_WRONLY | O_APPEND | O_CREAT | O_TRUNC, 0644);
                 write(fd, mess, strlen(mess));
                 close(fd);
@@ -131,7 +150,7 @@ int all_bledev_done(void)
 {
     for(int i=0; i<MAXBLEDEV; i++) {
         if (bledev[i].device != NULL) {
-            if (bledev[i].done != IS_DONE) {
+            if (bledev[i].done & IS_DONE) {
                 log_debug(TAG, "all_bledev_done NOT  DONE");
                 return 0;
             }
@@ -244,6 +263,11 @@ void on_read(Device *device, Characteristic *characteristic, const GByteArray *b
         uint16_t humi = parser_get_uint16(parser);
         log_debug(TAG, "hum = %d", humi);
         bledev_set_humi(device,humi);
+    } else if (g_str_equal(uuid, BATVAL_CHAR_UUID)) {
+        log_debug(TAG, "Battery Level to parse...");
+        uint16_t humi = parser_get_uint16(parser);
+        log_debug(TAG, "bat = %d", humi);
+        bledev_set_batl(device,humi);
     }
     bledev_write_info(device);
     parser_free(parser);
@@ -275,6 +299,7 @@ void on_services_resolved(Device *device) {
     binc_device_read_char(device, HTS_SERVICE_UUID, PRESSURE_CHAR_UUID);
     binc_device_read_char(device, HTS_SERVICE_UUID, HUMIDITY_CHAR_UUID);
     // binc_device_read_desc(device, HTS_SERVICE_UUID, TEMPERATURE_CHAR_UUID, CUD_CHAR);
+    binc_device_read_char(device, BAT_SERVICE_UUID, BATVAL_CHAR_UUID);
 }
 
 gboolean on_request_authorization(Device *device) {
