@@ -47,7 +47,7 @@
 #define BAT_SERVICE_UUID "0000180f-0000-1000-8000-00805f9b34fb"
 #define BATVAL_CHAR_UUID "00002a19-0000-1000-8000-00805f9b34fb"
 
-#define MAXTRIES 10
+#define MAXTRIES 20
 
 GMainLoop *loop = NULL;
 Adapter *default_adapter = NULL;
@@ -192,11 +192,20 @@ void on_connection_state_changed(Device *device, ConnectionState state, const GE
         return;
     }
 
-    log_debug(TAG, "'%s' (%s) state: %s (%d)", binc_device_get_name(device), binc_device_get_address(device),
+    log_debug(TAG, "'%s' (%s) on_connection_state_changed state: %s (%d)", binc_device_get_name(device), binc_device_get_address(device),
               binc_device_get_connection_state_name(device), state);
 
     if (state == BINC_DISCONNECTED) {
         // Remove devices immediately of they are not bonded
+	for(int i=0; i<MAXBLEDEV; i++) {
+            if (bledev[i].device == device) {
+                if (bledev[i].done & IS_DONE) {
+                    log_debug(TAG, "'%s' (%s) on_connection_state_changed DONE", binc_device_get_name(device), binc_device_get_address(device));
+	        } else {
+                    log_debug(TAG, "'%s' (%s) on_connection_state_changed NOT DONE", binc_device_get_name(device), binc_device_get_address(device));
+	        }
+	    }
+        }
         if (binc_device_get_bonding_state(device) != BINC_BONDED) {
             binc_adapter_remove_device(default_adapter, device);
         }
@@ -273,7 +282,8 @@ void on_read(Device *device, Characteristic *characteristic, const GByteArray *b
     parser_free(parser);
     if (all_bledev_done()) {
         fail = 0;
-        tries = MAXTRIES; /* Done exit in the next loop */
+	// Problem we need time to process more than 1 sensor...
+        // tries = MAXTRIES; /0 Done exit in the next loop 0/
     }
 }
 
@@ -328,6 +338,7 @@ void on_scan_result(Adapter *adapter, Device *device) {
         /* XXX binc_adapter_stop_discovery we will get only one sensor */
         // binc_adapter_stop_discovery(adapter);
 
+        add_bledev(device); // It seems we need to add it early
         binc_device_set_connection_state_change_cb(device, &on_connection_state_changed);
         binc_device_set_services_resolved_cb(device, &on_services_resolved);
         binc_device_set_bonding_state_changed_cb(device, &on_bonding_state_changed);
@@ -337,7 +348,6 @@ void on_scan_result(Adapter *adapter, Device *device) {
         binc_device_set_notify_state_cb(device, &on_notification_state_changed);
         binc_device_set_read_desc_cb(device, &on_desc_read);
         binc_device_connect(device);
-        add_bledev(device);
     } else {
         log_debug(TAG,"ignoring...");
     }
