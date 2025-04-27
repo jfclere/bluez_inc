@@ -65,10 +65,12 @@ struct info {
 };
 
 /* place to the BLE device and status */
+#define NAMESIZE 20
 struct bledev {
     Device *device;
     int done;
     struct info info;
+    char name[NAMESIZE];
 };
 #define MAXBLEDEV 10
 struct bledev bledev[MAXBLEDEV] = { 0 };
@@ -76,8 +78,8 @@ struct bledev bledev[MAXBLEDEV] = { 0 };
 #define HAS_TEMP     0x01
 #define HAS_PRES     0x02
 #define HAS_HUMI     0x04
-#define IS_DONE      0x07
-#define HAS_BATL     0x20
+#define HAS_BATL     0x08
+#define IS_DONE      0x0F
 #define NEEDS_REMOVE 0x10
 
 /* the values once we receive them */
@@ -115,7 +117,7 @@ void bledev_set_batl(Device *device, uint16_t batl)
 {
     for(int i=0; i<MAXBLEDEV; i++) {
         if (bledev[i].device == device) {
-            bledev[i].info.batl = batl;
+            bledev[i].info.batl = batl / 1.0;
             bledev[i].done = bledev[i].done | HAS_BATL;
             break;
         }
@@ -125,7 +127,7 @@ void bledev_write_info(Device *device)
 {
     for(int i=0; i<MAXBLEDEV; i++) {
         if (bledev[i].device == device) {
-            if (bledev[i].done & IS_DONE) {
+            if ((bledev[i].done & IS_DONE) == IS_DONE) {
                 char mess[100];
                 char tmpname[100];
                 const char* name = binc_device_get_name(device);
@@ -148,22 +150,28 @@ void bledev_write_info(Device *device)
 /* check if all devices have given their values */
 int all_bledev_done(void)
 {
+    int ret = 1;
     for(int i=0; i<MAXBLEDEV; i++) {
         if (bledev[i].device != NULL) {
-            if (bledev[i].done & IS_DONE) {
-                log_debug(TAG, "all_bledev_done NOT  DONE");
-                return 0;
+            if ((bledev[i].done & IS_DONE) != IS_DONE) {
+                log_debug(TAG, "all_bledev_done %s NOT DONE", bledev[i].name);
+                ret = 0;
             }
         }
     }
-    log_debug(TAG, "all_bledev_done all  DONE");
-    return 1;
+    if (ret)
+        log_debug(TAG, "all_bledev_done DONE");
+    return ret;
 }
 void bledev_disconnect(void)
 {
     for(int i=0; i<MAXBLEDEV; i++) {
         if (bledev[i].device != NULL) {
-            binc_device_disconnect(bledev[i].device);
+            const char* path = binc_device_get_path(bledev[i].device);
+	    if (path != NULL) {
+                log_debug(TAG, "bledev_disconnect '%s'", bledev[i].name);
+                binc_device_disconnect(bledev[i].device);
+            }
             bledev[i].device = NULL;
             bledev[i].done = 0;
         }
@@ -171,14 +179,26 @@ void bledev_disconnect(void)
 }
 void add_bledev(Device *device)
 {
+    const char* name = binc_device_get_name(device);
     for(int i=0; i<MAXBLEDEV; i++) {
         if (bledev[i].device == device) {
+            log_debug(TAG, "'%s' (%s) add_bledev already %s", name, binc_device_get_address(device), bledev[i].name);
             bledev[i].done = 0;
             return;
         }
     }
+    /* Check for already existing names */
+    for(int i=0; i<MAXBLEDEV; i++) {
+        if (strcmp(bledev[i].name, name) == 0) {
+            log_debug(TAG, "'%s' (%s) add_bledev TWICE %d", name, binc_device_get_address(device), bledev[i].done);
+        }
+    }
+   
     for(int i=0; i<MAXBLEDEV; i++) {
         if (bledev[i].device == NULL) {
+            log_debug(TAG, "'%s' (%s) add_bledev", name, binc_device_get_address(device));
+            strncpy(bledev[i].name, name, NAMESIZE);
+            bledev[i].name[NAMESIZE-1] = '\0';
             bledev[i].device = device;
             bledev[i].done = 0;
             return;
@@ -188,7 +208,7 @@ void add_bledev(Device *device)
 
 void on_connection_state_changed(Device *device, ConnectionState state, const GError *error) {
     if (error != NULL) {
-        log_debug(TAG, "(dis)connect failed (error %d: %s)", error->code, error->message);
+        log_debug(TAG, "(dis)connect failed (error %d: %s) on %s", error->code, error->message, binc_device_get_name(device));
         return;
     }
 
@@ -197,17 +217,23 @@ void on_connection_state_changed(Device *device, ConnectionState state, const GE
 
     if (state == BINC_DISCONNECTED) {
         // Remove devices immediately of they are not bonded
+        int done = 1;
 	for(int i=0; i<MAXBLEDEV; i++) {
             if (bledev[i].device == device) {
-                if (bledev[i].done & IS_DONE) {
+                if ((bledev[i].done & IS_DONE) == IS_DONE) {
                     log_debug(TAG, "'%s' (%s) on_connection_state_changed DONE", binc_device_get_name(device), binc_device_get_address(device));
 	        } else {
                     log_debug(TAG, "'%s' (%s) on_connection_state_changed NOT DONE", binc_device_get_name(device), binc_device_get_address(device));
+		    done = 0;
 	        }
 	    }
         }
         if (binc_device_get_bonding_state(device) != BINC_BONDED) {
-            binc_adapter_remove_device(default_adapter, device);
+            /* Remove the device if we are Done with it */
+            if (done)
+                binc_adapter_remove_device(default_adapter, device);
+            else
+                log_debug(TAG, "'%s' (%s) on_connection_state_changed NOT DONE not removing", binc_device_get_name(device), binc_device_get_address(device));
         }
     }
 }
@@ -282,8 +308,7 @@ void on_read(Device *device, Characteristic *characteristic, const GByteArray *b
     parser_free(parser);
     if (all_bledev_done()) {
         fail = 0;
-	// Problem we need time to process more than 1 sensor...
-        // tries = MAXTRIES; /0 Done exit in the next loop 0/
+        tries = MAXTRIES; /* Done exit in the next loop */
     }
 }
 
@@ -379,7 +404,7 @@ int remove_connected_device(Adapter *adapter) {
     result = binc_adapter_get_devices(adapter);
     for (GList *iterator = result; iterator; iterator = iterator->next) {
         Device *device = (Device *) iterator->data;
-        log_debug(TAG, "remove_connected_device all %s", binc_device_get_name(device));
+        log_debug(TAG, "remove_connected_device %s", binc_device_get_name(device));
         binc_adapter_remove_device(adapter, device);
         disconnect = 1;
     }
@@ -422,6 +447,7 @@ gboolean callback(gpointer data) {
         agent = NULL;
     }
 
+    log_debug(TAG, "callback calling bledev_disconnect");
     bledev_disconnect();
 
     if (default_adapter != NULL) {
