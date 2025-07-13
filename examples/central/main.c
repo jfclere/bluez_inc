@@ -55,6 +55,7 @@ Agent *agent = NULL;
 char *bledevnameprefix = NULL;
 int tries = 0;
 int fail = -1; /* we reset it once we have the information */
+int nodevice = -1;
 
 /* place to store the temperature, pressure and humidity */
 struct info {
@@ -235,6 +236,8 @@ void on_connection_state_changed(Device *device, ConnectionState state, const GE
             else
                 log_debug(TAG, "'%s' (%s) on_connection_state_changed NOT DONE not removing", binc_device_get_name(device), binc_device_get_address(device));
         }
+    } else if (state == BINC_CONNECTED) {
+        nodevice = 0; /* there is a device we should be able to read from it */
     }
 }
 
@@ -288,26 +291,29 @@ void on_read(Device *device, Characteristic *characteristic, const GByteArray *b
         int16_t temp = parser_get_sint16(parser);
         log_debug(TAG, "temp = %d", temp);
         bledev_set_temp(device, temp);
+        fail = 0;
     } else if (g_str_equal(uuid, PRESSURE_CHAR_UUID)) {
         log_debug(TAG, "Pressure to parse...");
         uint32_t pres = parser_get_uint32(parser);
         log_debug(TAG, "pres = %d", pres);
         bledev_set_pres(device,pres);
+        fail = 0;
     } else if (g_str_equal(uuid, HUMIDITY_CHAR_UUID)) {
         log_debug(TAG, "Humidity to parse...");
         uint16_t humi = parser_get_uint16(parser);
         log_debug(TAG, "hum = %d", humi);
         bledev_set_humi(device,humi);
+        fail = 0;
     } else if (g_str_equal(uuid, BATVAL_CHAR_UUID)) {
         log_debug(TAG, "Battery Level to parse...");
         uint16_t humi = parser_get_uint16(parser);
         log_debug(TAG, "bat = %d", humi);
         bledev_set_batl(device,humi);
+        fail = 0;
     }
     bledev_write_info(device);
     parser_free(parser);
     if (all_bledev_done()) {
-        fail = 0;
         tries = MAXTRIES; /* Done exit in the next loop */
     }
 }
@@ -531,6 +537,10 @@ int main(int argc, char **argv) {
     g_main_loop_unref(loop);
     if (!all_bledev_done()) {
         log_error("MAIN", "Not all the value were discovered\n");
+        exit(1);
+    }
+    if ((!nodevice) && fail) {
+        log_error("MAIN", "There is a device but it didn't report\n");
         exit(1);
     }
     return 0;
